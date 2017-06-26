@@ -9,12 +9,19 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 
+
+#define BLUE_LED_PIN     2 // Blue LED.
+#define RELAY_PIN        4 // Relay control.
+#define OPTOCOUPLER_PIN  5 // Optocoupler input.
+
 ESP8266WebServer server(80);
 
 //define your default values here, if there are different values in config.json, they are overwritten.
-char mqtt_server[40];
-char mqtt_port[6] = "8080";
-char blynk_token[34] = "YOUR_BLYNK_TOKEN";
+char client_secret[128] = "";
+char client_id[128] = "";
+char refresh_token[128] = "";
+char access_token[128] = "";
+char device_id[128] = "";
 
 //flag for saving data
 bool shouldSaveConfig = false;
@@ -29,14 +36,30 @@ void handleRoot() {
   server.send(200, "text/plain", "hello from esp8266!");
 }
 
-void handleUpdater() {
-  WiFiClient theclient = server.client();
-  Serial.println("The Client IP: "); 
-  Serial.println(theclient.localIP());
-  Serial.println(theclient.remoteIP());
-  server.send(200, "text/plain", "hello from esp8266!");
+void handleDisconnect(){
+  WiFi.disconnect();
+  server.send(200, "text/plain", "Disconnected");
 }
 
+void handleRelayOn() {
+  digitalWrite(RELAY_PIN, HIGH);
+  server.send(200, "text/plain", "Relay On");
+}
+
+void handleRelayOff() {
+  digitalWrite(RELAY_PIN, LOW);
+  server.send(200, "text/plain", "Relay Off");
+}
+
+void handleLedOn() {
+  digitalWrite(BLUE_LED_PIN, HIGH);
+  server.send(200, "text/plain", "LED On");
+}
+
+void handleLedOff() {
+  digitalWrite(BLUE_LED_PIN, LOW);
+  server.send(200, "text/plain", "LED Off");
+}
 
 void handleNotFound(){
   String message = "File Not Found\n\n";
@@ -84,9 +107,10 @@ void setup() {
         if (json.success()) {
           Serial.println("\nparsed json");
 
-          strcpy(mqtt_server, json["mqtt_server"]);
-          strcpy(mqtt_port, json["mqtt_port"]);
-          strcpy(blynk_token, json["blynk_token"]);
+          strcpy(client_secret, json["client_secret"]);
+          strcpy(client_id, json["client_id"]);
+          strcpy(refresh_token, json["refresh_token"]);
+          strcpy(device_id, json["device_id"]);
 
         } else {
           Serial.println("failed to load json config");
@@ -103,9 +127,10 @@ void setup() {
   // The extra parameters to be configured (can be either global or just in the setup)
   // After connecting, parameter.getValue() will get you the configured value
   // id/name placeholder/prompt default length
-  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
-  WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 6);
-  WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, 32);
+  WiFiManagerParameter custom_client_secret("client_secret", "client_secret", client_secret, 128);
+  WiFiManagerParameter custom_client_id("client_id", "client_id", client_id, 128);
+  WiFiManagerParameter custom_refresh_token("refresh_token", "refresh_token", refresh_token, 128);
+  WiFiManagerParameter custom_device_id("device_id", "device_id", device_id, 128);
 
   //WiFiManager
   //Local intialization. Once its business is done, there is no need to keep it around
@@ -118,9 +143,10 @@ void setup() {
   //wifiManager.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0));
   
   //add all your parameters here
-  wifiManager.addParameter(&custom_mqtt_server);
-  wifiManager.addParameter(&custom_mqtt_port);
-  wifiManager.addParameter(&custom_blynk_token);
+  wifiManager.addParameter(&custom_client_secret);
+  wifiManager.addParameter(&custom_client_id);
+  wifiManager.addParameter(&custom_refresh_token);
+  wifiManager.addParameter(&custom_device_id);
 
   //reset settings - for testing
   //wifiManager.resetSettings();
@@ -150,18 +176,20 @@ void setup() {
   Serial.println("connected...yeey :)");
 
   //read updated parameters
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
-  strcpy(mqtt_port, custom_mqtt_port.getValue());
-  strcpy(blynk_token, custom_blynk_token.getValue());
+  strcpy(client_secret, custom_client_secret.getValue());
+  strcpy(client_id, custom_client_id.getValue());
+  strcpy(refresh_token, custom_refresh_token.getValue());
+  strcpy(device_id, custom_device_id.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
-    json["mqtt_server"] = mqtt_server;
-    json["mqtt_port"] = mqtt_port;
-    json["blynk_token"] = blynk_token;
+    json["client_secret"] = client_secret;
+    json["client_id"] = client_id;
+    json["refresh_token"] = refresh_token;
+    json["device_id"] = device_id;
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -173,7 +201,8 @@ void setup() {
     configFile.close();
     //end save
   }
-  pinMode(2, OUTPUT);
+  pinMode(BLUE_LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
 
   Serial.println("local ip");
   Serial.println(WiFi.localIP());
@@ -183,24 +212,129 @@ void setup() {
   }
 
   server.on("/", handleRoot);
+  server.on("/disconnectWifi", handleDisconnect);
+  server.on("/turnOnRelay", handleRelayOn);
+  server.on("/turnOffRelay", handleRelayOff);
+  server.on("/turnOnLed", handleLedOn);
+  server.on("/turnOffLed", handleLedOff);
   
-  server.on("/update", handleUpdater);
-
   server.onNotFound(handleNotFound);
 
   server.begin();
   Serial.println("HTTP server started");  
 
+  // WiFi.disconnect();
 }
 
-void loop() {
+
+String httpsPostRequest(String s_host, uint16_t httpsPort, String url, String payload) {
+  char host[256];
+  s_host.toCharArray(host, 256);
   
+  // Use WiFiClientSecure class to create TLS connection
+  WiFiClientSecure client;
+  Serial.print("connecting to ");
+  Serial.println(host);
+  if (!client.connect(host, httpsPort)) {
+    Serial.println("connection failed");
+    return "failed";
+  }
+/*
+  if (client.verify(fingerprint, host)) {
+    Serial.println("certificate matches");
+  } else {
+    Serial.println("certificate doesn't match");
+  }
+*/
+
+//  String url = "/repos/esp8266/Arduino/commits/master/status";
+  Serial.print("requesting URL: ");
+  Serial.println(url);
+
+  String header = String("POST ") + url + " HTTP/1.0\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: BuildFailureDetectorESP8266\r\n" +
+               "Content-Type: application/x-www-form-urlencoded\r\n" +
+               "Connection: keep-alive\r\n";
+  if(payload.length() != 0) {
+    header = header + "Content-Length: "+ payload.length() +
+               "\r\n\r\n" + payload;
+  }
+  else {
+    header = header + "Content-Length: 0\r\n\r\n";
+  }
+  Serial.println(header);
+
+  client.print(header);
+
+/*
+  client.print(String("POST ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: BuildFailureDetectorESP8266\r\n");
+  client.print("Content-Type: application/json\r\n");
+  client.print("Connection: keep-alive\r\n");
+  client.print("Content-Length: ");
+  client.print(payload.length());
+  client.print("\r\n\r\n");
+  client.print(payload);
+*/
+
+  Serial.println("request sent");
+  while (client.connected()) {
+    String line = client.readStringUntil('\n');
+      Serial.println("Line headers " + line);
+    if (line == "\r") {
+      Serial.println("headers received");
+      break;
+    }
+  }
+  String line = client.readStringUntil('\n');
+  Serial.println("Result " + line);
+
+  return line;
+}
+
+
+void loop() {
+  static int once = 0;
   server.handleClient();
   // put your main code here, to run repeatedly:
-   digitalWrite(2, LOW);
-   delay(1000);
-   digitalWrite(2, HIGH);
-   delay(1000);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  delay(1000);
+  digitalWrite(BLUE_LED_PIN, HIGH);
+  delay(1000);
   
+  if(once == 0){
+    String str_refresh_token = String(refresh_token);
+    str_refresh_token.replace("|", "%7C");
+    String data = "client_secret="+String(client_secret)+"&grant_type=refresh_token&client_id="+client_id+"&refresh_token="+str_refresh_token;
+
+    String authCode = httpsPostRequest("api.netatmo.com", 443, "/oauth2/token", data);
+
+    size_t size = authCode.length();
+    // Allocate a buffer to store contents of the file.
+    std::unique_ptr<char[]> buf(new char[size]);
+
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.parseObject(authCode);
+    json.printTo(Serial);
+    if (json.success()) {
+      Serial.println("\nparsed json");
+      strcpy(access_token, json["access_token"]);
+      strcpy(refresh_token, json["refresh_token"]);
+    } else {
+      Serial.println("failed to load json config");
+    }
+    String str_access_token = String(access_token);
+    str_access_token.replace("|", "%7C");
+    String str_device_id = String(device_id);
+    str_device_id.replace(":", "%3A");
+
+    String params = "?access_token="+str_access_token+"&device_id="+str_device_id;
+    httpsPostRequest("api.netatmo.com", 443, "/api/syncthermstate"+params, "");
+    String temp = httpsPostRequest("api.netatmo.com", 443, "/api/getthermostatsdata"+params, "");
+
+  }
+  once = 1;
 
 }
