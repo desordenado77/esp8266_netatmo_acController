@@ -41,24 +41,30 @@ void handleDisconnect(){
   server.send(200, "text/plain", "Disconnected");
 }
 
-void handleRelayOn() {
-  digitalWrite(RELAY_PIN, HIGH);
-  server.send(200, "text/plain", "Relay On");
+void handlePin(String Name) {
+  String value = server.arg("value");
+  if(value.equalsIgnoreCase("on")){
+    digitalWrite(RELAY_PIN, HIGH);
+  }
+  else {
+    if(value.equalsIgnoreCase("off")){
+      digitalWrite(RELAY_PIN, LOW);
+    }
+    else {
+      server.send(200, "text/plain", Name + " Unknown value "+value);
+      return;
+    }    
+  }
+  server.send(200, "text/plain", Name + " "+ value);
 }
 
-void handleRelayOff() {
-  digitalWrite(RELAY_PIN, LOW);
-  server.send(200, "text/plain", "Relay Off");
+
+void handleRelay() {
+  handlePin("Relay");
 }
 
-void handleLedOn() {
-  digitalWrite(BLUE_LED_PIN, HIGH);
-  server.send(200, "text/plain", "LED On");
-}
-
-void handleLedOff() {
-  digitalWrite(BLUE_LED_PIN, LOW);
-  server.send(200, "text/plain", "LED Off");
+void handleLed() {
+  handlePin("Led");
 }
 
 void handleNotFound(){
@@ -213,10 +219,8 @@ void setup() {
 
   server.on("/", handleRoot);
   server.on("/disconnectWifi", handleDisconnect);
-  server.on("/turnOnRelay", handleRelayOn);
-  server.on("/turnOffRelay", handleRelayOff);
-  server.on("/turnOnLed", handleLedOn);
-  server.on("/turnOffLed", handleLedOff);
+  server.on("/relay", handleRelay);
+  server.on("/led", handleLed);
   
   server.onNotFound(handleNotFound);
 
