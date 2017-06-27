@@ -266,7 +266,7 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
   else {
     header = header + "Content-Length: 0\r\n\r\n";
   }
-  Serial.println(header);
+  //Serial.println(header);
 
   client.print(header);
 
@@ -275,12 +275,11 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
   while (client.connected()) {
     String line = client.readStringUntil('\n');
     responseHeader = responseHeader + line;
-      Serial.println("Line headers " + line);
+    // Serial.println("Line headers " + line);
     if (line == "\r") {
       Serial.println("headers received");
-      Serial.println(responseHeader);
       if(!responseHeader.startsWith("HTTP/1.1 200")) {
-        Serial.println("HTTP respose is not 200");
+        Serial.println("HTTP respose is not 200. Complete Header:\n\n" + responseHeader + "\n\n");
         client.stop();
         return -1;
       }
@@ -288,7 +287,7 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
     }
   }
   *ret = client.readStringUntil('\n');
-  Serial.println("Result " + *ret);
+//  Serial.println("Result " + *ret);
 
   return 0;
 }
@@ -312,7 +311,7 @@ int getRefreshToken(){
 
   DynamicJsonBuffer jsonBuffer;
   JsonObject& json = jsonBuffer.parseObject(authCode);
-  json.printTo(Serial);
+  // json.printTo(Serial);
   if (json.success()) {
     Serial.println("\nparsed json");
     strcpy(access_token, json["access_token"]);
@@ -325,7 +324,7 @@ int getRefreshToken(){
 }
 
 
-int getTemperature(int * temp, int* set_temp, int* read_time){
+int getThermostatData(float * temp, float* set_temp, int* read_time){
   int ret = 0;
   String str_temp;
   String str_access_token = String(access_token);
@@ -345,7 +344,49 @@ int getTemperature(int * temp, int* set_temp, int* read_time){
     Serial.println("failed get temperature");
     return ret;
   }
+  
+  size_t size = str_temp.length();
+  // Allocate a buffer to store contents of the file.
+  std::unique_ptr<char[]> buf(new char[size]);
+
+  DynamicJsonBuffer jsonBuffer;
+  JsonObject& json = jsonBuffer.parseObject(str_temp);
+  // json.printTo(Serial);
+  if (json.success()) {
+    char tempArray[128];
+    Serial.println("\nparsed json");
+    strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["setpoint_temp"]);
+    *set_temp = atof(tempArray);
+    strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["temperature"]);
+    *temp = atof(tempArray);
+    strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["time"]);
+    *read_time = atoi(tempArray);
+  } else {
+    Serial.println("failed to parse refresh token response");
+    return -1;
+  }
+    
   return 0;
+}
+
+int getTemperature(float * temp, float* set_temp, int* read_time){
+  int ret = 0;
+  
+  ret = getThermostatData(temp, set_temp, read_time);
+  if(ret != 0) {
+    Serial.println("getThermostatData failed, Unable to get the temperature");
+    ret = getRefreshToken();
+    if(ret != 0) {
+      Serial.println("getRefreshToken failed, Unable to get the refresh token");
+    }
+    else {
+      ret = getThermostatData(temp, set_temp, read_time);
+      if(ret != 0) {
+        Serial.println("getThermostatData failed, Unable to get the temperature");    
+      }
+    }
+  }
+  return ret;
 }
 
 
@@ -359,23 +400,15 @@ void loop() {
   delay(1000);
   
   if(once == 0){
-    int temp, set_temp, read_time;
-    int ret = 0;
-    
-    ret = getTemperature(&temp, &set_temp, &read_time);
-    if(ret != 0) {
-      Serial.println("Unable to get the temperature");
-      ret = getRefreshToken();
-      if(ret != 0) {
-        Serial.println("Unable to get the refresh token");
-      }
-      else {
-        ret = getTemperature(&temp, &set_temp, &read_time);
-        if(ret != 0) {
-          Serial.println("Unable to get the temperature");    
-        }
-      }
-    }
+    float temp, set_temp;
+    int read_time;
+    int ret = getTemperature(&temp, &set_temp, &read_time);
+    Serial.print("Set temp ");
+    Serial.println(set_temp);
+    Serial.print("temperature ");
+    Serial.println(temp);
+    Serial.print("time "); 
+    Serial.println(read_time);
   }
   once = 1;
 
