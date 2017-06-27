@@ -227,7 +227,7 @@ void setup() {
 }
 
 
-String httpsPostRequest(String s_host, uint16_t httpsPort, String url, String payload) {
+int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String payload, String* ret) {
   char host[256];
   s_host.toCharArray(host, 256);
   
@@ -237,7 +237,7 @@ String httpsPostRequest(String s_host, uint16_t httpsPort, String url, String pa
   Serial.println(host);
   if (!client.connect(host, httpsPort)) {
     Serial.println("connection failed");
-    return "failed";
+    return -1;
   }
 /*
   if (client.verify(fingerprint, host)) {
@@ -247,13 +247,12 @@ String httpsPostRequest(String s_host, uint16_t httpsPort, String url, String pa
   }
 */
 
-//  String url = "/repos/esp8266/Arduino/commits/master/status";
   Serial.print("requesting URL: ");
   Serial.println(url);
 
   String header = String("POST ") + url + " HTTP/1.0\r\n" +
                "Host: " + host + "\r\n" +
-               "User-Agent: BuildFailureDetectorESP8266\r\n" +
+               "User-Agent: ESP8266\r\n" +
                "Content-Type: application/x-www-form-urlencoded\r\n" +
                "Connection: keep-alive\r\n";
   if(payload.length() != 0) {
@@ -267,31 +266,82 @@ String httpsPostRequest(String s_host, uint16_t httpsPort, String url, String pa
 
   client.print(header);
 
-/*
-  client.print(String("POST ") + url + " HTTP/1.1\r\n" +
-               "Host: " + host + "\r\n" +
-               "User-Agent: BuildFailureDetectorESP8266\r\n");
-  client.print("Content-Type: application/json\r\n");
-  client.print("Connection: keep-alive\r\n");
-  client.print("Content-Length: ");
-  client.print(payload.length());
-  client.print("\r\n\r\n");
-  client.print(payload);
-*/
-
   Serial.println("request sent");
+  String responseHeader = "";
   while (client.connected()) {
     String line = client.readStringUntil('\n');
+    responseHeader = responseHeader + line;
       Serial.println("Line headers " + line);
     if (line == "\r") {
       Serial.println("headers received");
+      Serial.println(responseHeader);
+      if(!responseHeader.startsWith("HTTP/1.1 200")) {
+        Serial.println("HTTP respose is not 200");
+        client.stop();
+        return -1;
+      }
       break;
     }
   }
-  String line = client.readStringUntil('\n');
-  Serial.println("Result " + line);
+  *ret = client.readStringUntil('\n');
+  Serial.println("Result " + *ret);
 
-  return line;
+  return 0;
+}
+
+
+int getRefreshToken(){
+  String str_refresh_token = String(refresh_token);
+  str_refresh_token.replace("|", "%7C");
+  String data = "client_secret="+String(client_secret)+"&grant_type=refresh_token&client_id="+client_id+"&refresh_token="+str_refresh_token;
+
+  String authCode;
+  int ret = httpsPostRequest("api.netatmo.com", 443, "/oauth2/token", data, &authCode);
+  if(ret != 0) {
+    Serial.println("failed get refresh token, https request failed");
+    return ret;
+  }
+
+  size_t size = authCode.length();
+  // Allocate a buffer to store contents of the file.
+  std::unique_ptr<char[]> buf(new char[size]);
+
+  DynamicJsonBuffer jsonBuffer;
+  JsonObject& json = jsonBuffer.parseObject(authCode);
+  json.printTo(Serial);
+  if (json.success()) {
+    Serial.println("\nparsed json");
+    strcpy(access_token, json["access_token"]);
+    strcpy(refresh_token, json["refresh_token"]);
+  } else {
+    Serial.println("failed to parse refresh token response");
+    return -1;
+  }
+  return 0;
+}
+
+
+int getTemperature(int * temp, int* set_temp, int* read_time){
+  int ret = 0;
+  String str_temp;
+  String str_access_token = String(access_token);
+  str_access_token.replace("|", "%7C");
+  String str_device_id = String(device_id);
+  str_device_id.replace(":", "%3A");
+
+  String params = "?access_token="+str_access_token+"&device_id="+str_device_id;
+  ret = httpsPostRequest("api.netatmo.com", 443, "/api/syncthermstate"+params, "", &str_temp);
+  if(ret != 0) {
+    Serial.println("failed get sync thermostat");
+    return ret;
+  }
+
+  ret = httpsPostRequest("api.netatmo.com", 443, "/api/getthermostatsdata"+params, "", &str_temp);
+  if(ret != 0) {
+    Serial.println("failed get temperature");
+    return ret;
+  }
+  return 0;
 }
 
 
@@ -305,35 +355,23 @@ void loop() {
   delay(1000);
   
   if(once == 0){
-    String str_refresh_token = String(refresh_token);
-    str_refresh_token.replace("|", "%7C");
-    String data = "client_secret="+String(client_secret)+"&grant_type=refresh_token&client_id="+client_id+"&refresh_token="+str_refresh_token;
-
-    String authCode = httpsPostRequest("api.netatmo.com", 443, "/oauth2/token", data);
-
-    size_t size = authCode.length();
-    // Allocate a buffer to store contents of the file.
-    std::unique_ptr<char[]> buf(new char[size]);
-
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.parseObject(authCode);
-    json.printTo(Serial);
-    if (json.success()) {
-      Serial.println("\nparsed json");
-      strcpy(access_token, json["access_token"]);
-      strcpy(refresh_token, json["refresh_token"]);
-    } else {
-      Serial.println("failed to load json config");
+    int temp, set_temp, read_time;
+    int ret = 0;
+    
+    ret = getTemperature(&temp, &set_temp, &read_time);
+    if(ret != 0) {
+      Serial.println("Unable to get the temperature");
+      ret = getRefreshToken();
+      if(ret != 0) {
+        Serial.println("Unable to get the refresh token");
+      }
+      else {
+        ret = getTemperature(&temp, &set_temp, &read_time);
+        if(ret != 0) {
+          Serial.println("Unable to get the temperature");    
+        }
+      }
     }
-    String str_access_token = String(access_token);
-    str_access_token.replace("|", "%7C");
-    String str_device_id = String(device_id);
-    str_device_id.replace(":", "%3A");
-
-    String params = "?access_token="+str_access_token+"&device_id="+str_device_id;
-    httpsPostRequest("api.netatmo.com", 443, "/api/syncthermstate"+params, "");
-    String temp = httpsPostRequest("api.netatmo.com", 443, "/api/getthermostatsdata"+params, "");
-
   }
   once = 1;
 
