@@ -13,3 +13,5 @@ All my work is created using the following tools:
 * ESP8266 Arduino code
 * Arduino IDE
 * Netatmo SDK
+* Wifi Manager from tzapu, great work!!! heavily recommended for any ESP8266 project (https://github.com/tzapu/WiFiManager)
+* Arduino Json from bblanchon, good work also (https://github.com/bblanchon/ArduinoJson)
