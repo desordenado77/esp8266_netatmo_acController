@@ -438,6 +438,7 @@ void loop() {
   static float last_temp = 0;
   static float last_set_temp = 0;
   static int last_read_time = 0;
+  static int acOn = 0;
 
 
   if (telnet.hasClient()) {
@@ -497,13 +498,24 @@ void loop() {
         if(set_temp < temp) {
           DEBUG_LOG_INFO_LN("Turn On AC");
           digitalWrite(RELAY_PIN, RELAY_TURN_ON);
-          timeForAction = AC_ON_TIME_FOR_ACTION;
-              
+          if(acOn) {
+            timeForAction = NORMAL_TIME_FOR_ACTION;
+          }
+          else {
+            timeForAction = AC_ON_TIME_FOR_ACTION;
+          }
+          acOn = 1;
         }
         else {
           DEBUG_LOG_INFO_LN("Turn Off AC");
-          digitalWrite(RELAY_PIN, RELAY_TURN_ON);
-          timeForAction = NORMAL_TIME_FOR_ACTION;
+          digitalWrite(RELAY_PIN, RELAY_TURN_OFF);
+          if(acOn) {
+            timeForAction = AC_ON_TIME_FOR_ACTION;
+          }
+          else {
+            timeForAction = NORMAL_TIME_FOR_ACTION;
+          }
+          acOn = 0;
         }
       }
 
