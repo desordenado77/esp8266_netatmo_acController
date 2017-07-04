@@ -16,6 +16,9 @@
 #define RELAY_PIN        4 // Relay control.
 #define OPTOCOUPLER_PIN  5 // Optocoupler input.
 
+#define RELAY_TURN_OFF   LOW
+#define RELAY_TURN_ON    HIGH
+
 ESP8266WebServer server(80);
 
 WiFiServer telnet(23);
@@ -30,6 +33,13 @@ time_t now;
 
 #define DEBUG_LOG_INFO_LN(x) { if(enableTime) { now = time(nullptr); DEBUG_LOG(now); DEBUG_LOG(":"); DEBUG_LOG(__LINE__); DEBUG_LOG(":"); DEBUG_LOG_LN(x); } }
 #define DEBUG_LOG_INFO(x) { if(enableTime) { now = time(nullptr); DEBUG_LOG(now); DEBUG_LOG(":"); DEBUG_LOG(__LINE__); DEBUG_LOG(":"); DEBUG_LOG(x); } }
+
+#define NORMAL_TIME_FOR_ACTION    (15*60)
+#define AC_ON_TIME_FOR_ACTION     (30*60)
+
+time_t lastAction = 0;
+double timeForAction = NORMAL_TIME_FOR_ACTION;
+
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char client_secret[128] = "";
@@ -424,6 +434,11 @@ void loop() {
   uint8_t i;
   static int once = 0;
   server.handleClient();
+  time_t currentTime = time(nullptr);
+  static float last_temp = 0;
+  static float last_set_temp = 0;
+  static int last_read_time = 0;
+
 
   if (telnet.hasClient()) {
     if (!telnetClients || !telnetClients.connected()) {
@@ -446,28 +461,65 @@ void loop() {
       }
     }
   }
+
+  DEBUG_LOG_INFO("Diff time ");
+  DEBUG_LOG_LN((currentTime - lastAction));
+  DEBUG_LOG_INFO("timeForAction ");
+  DEBUG_LOG_LN(timeForAction);
   
-  // put your main code here, to run repeatedly:
+  if(lastAction == 0 || ((currentTime - lastAction) >= timeForAction)) {
+    float temp, set_temp;
+    int read_time;
+    int ret = getTemperature(&temp, &set_temp, &read_time);
+    if(ret != 0) {
+      DEBUG_LOG_INFO_LN("Thermostat get temp error");
+      digitalWrite(RELAY_PIN, RELAY_TURN_OFF);
+      timeForAction = NORMAL_TIME_FOR_ACTION;
+    }
+    else {
+      if((read_time - last_read_time)<(timeForAction/2)) {
+        DEBUG_LOG_INFO_LN("Thermostat read time Error: ");
+        DEBUG_LOG_INFO("\tRead Time: ");
+        DEBUG_LOG_LN(read_time);
+        DEBUG_LOG_INFO("\tLast read Time: ");
+        DEBUG_LOG_LN(last_read_time);      
+        timeForAction = NORMAL_TIME_FOR_ACTION;
+      }
+      else {
+        DEBUG_LOG_INFO_LN("Temperature: ");
+        DEBUG_LOG_LN(temp);
+        DEBUG_LOG_INFO_LN("Set Temperature: ");
+        DEBUG_LOG_LN(set_temp);
+        DEBUG_LOG_INFO_LN("Reading Time: ");
+        DEBUG_LOG_LN(read_time);
+        DEBUG_LOG_INFO_LN("Reading Time Diff: ");
+
+        if(set_temp < temp) {
+          DEBUG_LOG_INFO_LN("Turn On AC");
+          digitalWrite(RELAY_PIN, RELAY_TURN_ON);
+          timeForAction = AC_ON_TIME_FOR_ACTION;
+              
+        }
+        else {
+          DEBUG_LOG_INFO_LN("Turn Off AC");
+          digitalWrite(RELAY_PIN, RELAY_TURN_ON);
+          timeForAction = NORMAL_TIME_FOR_ACTION;
+        }
+      }
+
+      last_temp = temp;
+      last_set_temp = set_temp;
+      last_read_time = read_time;
+    }
+    lastAction = currentTime;    
+  }
+
   digitalWrite(BLUE_LED_PIN, LOW);
   delay(1000);
   digitalWrite(BLUE_LED_PIN, HIGH);
   delay(1000);
 
-  DEBUG_LOG_INFO_LN("I am alive");
-
-  DEBUG_LOG_INFO_LN(ESP.getFreeHeap());
+  DEBUG_LOG_INFO("Memory: ");
+  DEBUG_LOG_LN(ESP.getFreeHeap());
   
-  if(once == 0){
-    float temp, set_temp;
-    int read_time;
-    int ret = getTemperature(&temp, &set_temp, &read_time);
-    DEBUG_LOG_INFO("Set temp ");
-    DEBUG_LOG_LN(set_temp);
-    DEBUG_LOG_INFO("temperature ");
-    DEBUG_LOG_LN(temp);
-    DEBUG_LOG_INFO("time "); 
-    DEBUG_LOG_LN(read_time);
-  }
-  once = 1;
-
 }
