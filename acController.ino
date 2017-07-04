@@ -9,19 +9,27 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 
+#include <time.h>
+
 
 #define BLUE_LED_PIN     2 // Blue LED.
 #define RELAY_PIN        4 // Relay control.
 #define OPTOCOUPLER_PIN  5 // Optocoupler input.
 
 ESP8266WebServer server(80);
-#define MAX_SRV_CLIENTS 1
+
 WiFiServer telnet(23);
 WiFiClient telnetClients;
 int disconnectedClient = 1;
 
+int enableTime = 0;
+time_t now; 
+
 #define DEBUG_LOG_LN(x) { Serial.println(x); if(telnetClients) { telnetClients.println(x); } }
 #define DEBUG_LOG(x) { Serial.print(x); if(telnetClients) { telnetClients.print(x); } }
+
+#define DEBUG_LOG_INFO_LN(x) { if(enableTime) { now = time(nullptr); DEBUG_LOG(now); DEBUG_LOG(":"); DEBUG_LOG(__LINE__); DEBUG_LOG(":"); DEBUG_LOG_LN(x); } }
+#define DEBUG_LOG_INFO(x) { if(enableTime) { now = time(nullptr); DEBUG_LOG(now); DEBUG_LOG(":"); DEBUG_LOG(__LINE__); DEBUG_LOG(":"); DEBUG_LOG(x); } }
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char client_secret[128] = "";
@@ -35,7 +43,7 @@ bool shouldSaveConfig = false;
 
 //callback notifying us of the need to save config
 void saveConfigCallback () {
-  DEBUG_LOG_LN("Should save config");
+  DEBUG_LOG_INFO_LN("Should save config");
   shouldSaveConfig = true;
 }
 
@@ -93,22 +101,22 @@ void handleNotFound(){
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
-  DEBUG_LOG_LN();
+  DEBUG_LOG_INFO_LN();
 
   //clean FS, for testing
   //SPIFFS.format();
 
   //read configuration from FS json
-  DEBUG_LOG_LN("mounting FS...");
+  DEBUG_LOG_INFO_LN("mounting FS...");
 
   if (SPIFFS.begin()) {
-    DEBUG_LOG_LN("mounted file system");
+    DEBUG_LOG_INFO_LN("mounted file system");
     if (SPIFFS.exists("/config.json")) {
       //file exists, reading and loading
-      DEBUG_LOG_LN("reading config file");
+      DEBUG_LOG_INFO_LN("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
-        DEBUG_LOG_LN("opened config file");
+        DEBUG_LOG_INFO_LN("opened config file");
         size_t size = configFile.size();
         // Allocate a buffer to store contents of the file.
         std::unique_ptr<char[]> buf(new char[size]);
@@ -118,7 +126,7 @@ void setup() {
         JsonObject& json = jsonBuffer.parseObject(buf.get());
         json.printTo(Serial);
         if (json.success()) {
-          DEBUG_LOG_LN("\nparsed json");
+          DEBUG_LOG_INFO_LN("parsed json");
 
           strcpy(client_secret, json["client_secret"]);
           strcpy(client_id, json["client_id"]);
@@ -126,12 +134,12 @@ void setup() {
           strcpy(device_id, json["device_id"]);
 
         } else {
-          DEBUG_LOG_LN("failed to load json config");
+          DEBUG_LOG_INFO_LN("failed to load json config");
         }
       }
     }
   } else {
-    DEBUG_LOG_LN("failed to mount FS");
+    DEBUG_LOG_INFO_LN("failed to mount FS");
   }
   //end read
 
@@ -178,7 +186,7 @@ void setup() {
   //here  "AutoConnectAP"
   //and goes into a blocking loop awaiting configuration
   if (!wifiManager.autoConnect()) {
-    DEBUG_LOG_LN("failed to connect and hit timeout");
+    DEBUG_LOG_INFO_LN("failed to connect and hit timeout");
     delay(3000);
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
@@ -186,7 +194,7 @@ void setup() {
   }
 
   //if you get here you have connected to the WiFi
-  DEBUG_LOG_LN("connected...yeey :)");
+  DEBUG_LOG_INFO_LN("connected...yeey :)");
 
   //read updated parameters
   strcpy(client_secret, custom_client_secret.getValue());
@@ -196,7 +204,7 @@ void setup() {
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
-    DEBUG_LOG_LN("saving config");
+    DEBUG_LOG_INFO_LN("saving config");
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
     json["client_secret"] = client_secret;
@@ -206,7 +214,7 @@ void setup() {
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
-      DEBUG_LOG_LN("failed to open config file for writing");
+      DEBUG_LOG_INFO_LN("failed to open config file for writing");
     }
 
     json.printTo(Serial);
@@ -217,11 +225,11 @@ void setup() {
   pinMode(BLUE_LED_PIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
 
-  DEBUG_LOG_LN("local ip");
-  DEBUG_LOG_LN(WiFi.localIP());
+  DEBUG_LOG_INFO_LN("local ip");
+  DEBUG_LOG_INFO_LN(WiFi.localIP());
 
   if (MDNS.begin("esp8266")) {
-    DEBUG_LOG_LN("MDNS responder started");
+    DEBUG_LOG_INFO_LN("MDNS responder started");
   }
 
   server.on("/", handleRoot);
@@ -232,11 +240,25 @@ void setup() {
   server.onNotFound(handleNotFound);
 
   server.begin();
-  DEBUG_LOG_LN("HTTP server started");  
+  DEBUG_LOG_INFO_LN("HTTP server started");  
 
   telnet.begin();
   telnet.setNoDelay(true);
-  DEBUG_LOG_LN("Telnet server started");  
+  DEBUG_LOG_INFO_LN("Telnet server started");  
+
+  configTime(0, 0, "2.es.pool.ntp.org", "1.europe.pool.ntp.org", "2.europe.pool.ntp.org");
+  Serial.println("Waiting for time");
+  DEBUG_LOG_INFO(" ");
+  while (!time(nullptr)) {
+    DEBUG_LOG(".");
+    delay(1000);
+  }
+  DEBUG_LOG_LN("");
+  now = time(nullptr);
+  DEBUG_LOG_LN(ctime(&now));
+
+  enableTime = 1;
+  
   // WiFi.disconnect();
 }
 
@@ -247,22 +269,20 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
   
   // Use WiFiClientSecure class to create TLS connection
   WiFiClientSecure client;
-  DEBUG_LOG("connecting to ");
-  DEBUG_LOG_LN(host);
+  DEBUG_LOG_INFO_LN("connecting to " + String(host));
   if (!client.connect(host, httpsPort)) {
-    DEBUG_LOG_LN("connection failed");
+    DEBUG_LOG_INFO_LN("connection failed");
     return -1;
   }
 /*
   if (client.verify(fingerprint, host)) {
-    DEBUG_LOG_LN("certificate matches");
+    DEBUG_LOG_INFO_LN("certificate matches");
   } else {
-    DEBUG_LOG_LN("certificate doesn't match");
+    DEBUG_LOG_INFO_LN("certificate doesn't match");
   }
 */
 
-  DEBUG_LOG("requesting URL: ");
-  DEBUG_LOG_LN(url);
+  DEBUG_LOG_INFO_LN("requesting URL: " + url);
 
   String header = String("POST ") + url + " HTTP/1.0\r\n" +
                "Host: " + host + "\r\n" +
@@ -276,20 +296,20 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
   else {
     header = header + "Content-Length: 0\r\n\r\n";
   }
-  //DEBUG_LOG_LN(header);
+  //DEBUG_LOG_INFO_LN(header);
 
   client.print(header);
 
-  DEBUG_LOG_LN("request sent");
+  DEBUG_LOG_INFO_LN("request sent");
   String responseHeader = "";
   while (client.connected()) {
     String line = client.readStringUntil('\n');
     responseHeader = responseHeader + line;
-    // DEBUG_LOG_LN("Line headers " + line);
+    // DEBUG_LOG_INFO_LN("Line headers " + line);
     if (line == "\r") {
-      DEBUG_LOG_LN("headers received");
+      DEBUG_LOG_INFO_LN("headers received");
       if(!responseHeader.startsWith("HTTP/1.1 200")) {
-        DEBUG_LOG_LN("HTTP respose is not 200. Complete Header:\n\n" + responseHeader + "\n\n");
+        DEBUG_LOG_INFO_LN("HTTP respose is not 200. Complete Header:\n\n" + responseHeader + "\n\n");
         client.stop();
         return -1;
       }
@@ -297,7 +317,7 @@ int httpsPostRequest(String s_host, uint16_t httpsPort, String url, String paylo
     }
   }
   *ret = client.readStringUntil('\n');
-//  DEBUG_LOG_LN("Result " + *ret);
+//  DEBUG_LOG_INFO_LN("Result " + *ret);
 
   return 0;
 }
@@ -311,7 +331,7 @@ int getRefreshToken(){
   String authCode;
   int ret = httpsPostRequest("api.netatmo.com", 443, "/oauth2/token", data, &authCode);
   if(ret != 0) {
-    DEBUG_LOG_LN("failed get refresh token, https request failed");
+    DEBUG_LOG_INFO_LN("failed get refresh token, https request failed");
     return ret;
   }
 
@@ -323,11 +343,11 @@ int getRefreshToken(){
   JsonObject& json = jsonBuffer.parseObject(authCode);
   // json.printTo(Serial);
   if (json.success()) {
-    DEBUG_LOG_LN("\nparsed json");
+    DEBUG_LOG_INFO_LN("parsed json");
     strcpy(access_token, json["access_token"]);
     strcpy(refresh_token, json["refresh_token"]);
   } else {
-    DEBUG_LOG_LN("failed to parse refresh token response");
+    DEBUG_LOG_INFO_LN("failed to parse refresh token response");
     return -1;
   }
   return 0;
@@ -345,13 +365,13 @@ int getThermostatData(float * temp, float* set_temp, int* read_time){
   String params = "?access_token="+str_access_token+"&device_id="+str_device_id;
   ret = httpsPostRequest("api.netatmo.com", 443, "/api/syncthermstate"+params, "", &str_temp);
   if(ret != 0) {
-    DEBUG_LOG_LN("failed get sync thermostat");
+    DEBUG_LOG_INFO_LN("failed get sync thermostat");
     return ret;
   }
 
   ret = httpsPostRequest("api.netatmo.com", 443, "/api/getthermostatsdata"+params, "", &str_temp);
   if(ret != 0) {
-    DEBUG_LOG_LN("failed get temperature");
+    DEBUG_LOG_INFO_LN("failed get temperature");
     return ret;
   }
   
@@ -364,7 +384,7 @@ int getThermostatData(float * temp, float* set_temp, int* read_time){
   // json.printTo(Serial);
   if (json.success()) {
     char tempArray[128];
-    DEBUG_LOG_LN("\nparsed json");
+    DEBUG_LOG_INFO_LN("parsed json");
     strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["setpoint_temp"]);
     *set_temp = atof(tempArray);
     strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["temperature"]);
@@ -372,7 +392,7 @@ int getThermostatData(float * temp, float* set_temp, int* read_time){
     strcpy(tempArray, json["body"]["devices"][0]["modules"][0]["measured"]["time"]);
     *read_time = atoi(tempArray);
   } else {
-    DEBUG_LOG_LN("failed to parse refresh token response");
+    DEBUG_LOG_INFO_LN("failed to parse refresh token response");
     return -1;
   }
     
@@ -384,15 +404,15 @@ int getTemperature(float * temp, float* set_temp, int* read_time){
   
   ret = getThermostatData(temp, set_temp, read_time);
   if(ret != 0) {
-    DEBUG_LOG_LN("getThermostatData failed, Unable to get the temperature");
+    DEBUG_LOG_INFO_LN("getThermostatData failed, Unable to get the temperature");
     ret = getRefreshToken();
     if(ret != 0) {
-      DEBUG_LOG_LN("getRefreshToken failed, Unable to get the refresh token");
+      DEBUG_LOG_INFO_LN("getRefreshToken failed, Unable to get the refresh token");
     }
     else {
       ret = getThermostatData(temp, set_temp, read_time);
       if(ret != 0) {
-        DEBUG_LOG_LN("getThermostatData failed, Unable to get the temperature");    
+        DEBUG_LOG_INFO_LN("getThermostatData failed, Unable to get the temperature");    
       }
     }
   }
@@ -409,10 +429,10 @@ void loop() {
     if (!telnetClients || !telnetClients.connected()) {
       if (telnetClients) {
         telnetClients.stop();
-        DEBUG_LOG_LN("Telnet Client Stop");
+        DEBUG_LOG_INFO_LN("Telnet Client Stop");
       }
       telnetClients = telnet.available();
-      DEBUG_LOG_LN("New Telnet client");
+      DEBUG_LOG_INFO_LN("New Telnet client");
       telnetClients.flush();  // clear input buffer, else you get strange characters 
       disconnectedClient = 0;
     }
@@ -420,7 +440,7 @@ void loop() {
   else {
     if(!telnetClients.connected()) {
       if(disconnectedClient == 0) {
-        DEBUG_LOG_LN("Client Not connected");
+        DEBUG_LOG_INFO_LN("Client Not connected");
         telnetClients.stop();
         disconnectedClient = 1;
       }
@@ -433,19 +453,19 @@ void loop() {
   digitalWrite(BLUE_LED_PIN, HIGH);
   delay(1000);
 
-  DEBUG_LOG_LN("I am alive");
+  DEBUG_LOG_INFO_LN("I am alive");
 
-  DEBUG_LOG_LN(ESP.getFreeHeap());
+  DEBUG_LOG_INFO_LN(ESP.getFreeHeap());
   
   if(once == 0){
     float temp, set_temp;
     int read_time;
     int ret = getTemperature(&temp, &set_temp, &read_time);
-    DEBUG_LOG("Set temp ");
+    DEBUG_LOG_INFO("Set temp ");
     DEBUG_LOG_LN(set_temp);
-    DEBUG_LOG("temperature ");
+    DEBUG_LOG_INFO("temperature ");
     DEBUG_LOG_LN(temp);
-    DEBUG_LOG("time "); 
+    DEBUG_LOG_INFO("time "); 
     DEBUG_LOG_LN(read_time);
   }
   once = 1;
