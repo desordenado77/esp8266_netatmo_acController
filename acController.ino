@@ -36,10 +36,15 @@ time_t now;
 
 #define NORMAL_TIME_FOR_ACTION    (15*60)
 #define AC_ON_TIME_FOR_ACTION     (30*60)
+#define AC_OFF_TIME_FOR_ACTION    (20*60)
+
 
 time_t lastAction = 0;
 double timeForAction = NORMAL_TIME_FOR_ACTION;
 
+#define FORCED_AC_ON     1
+#define FORCED_AC_OFF    2
+int forcedAC = 0;
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char client_secret[128] = "";
@@ -63,7 +68,7 @@ void handleRoot() {
 
 void handleDisconnect(){
   WiFi.disconnect();
-  server.send(200, "text/plain", "Disconnected");
+  ESP.restart();
 }
 
 void handlePin(String Name) {
@@ -90,6 +95,23 @@ void handleRelay() {
 
 void handleLed() {
   handlePin("Led");
+}
+
+void handleAcControl() {
+  String value = server.arg("value");
+  if(value.equalsIgnoreCase("on")){
+    forcedAC = FORCED_AC_ON;
+  }
+  else {
+    if(value.equalsIgnoreCase("off")){
+      forcedAC = FORCED_AC_OFF;
+    }
+    else {
+      server.send(200, "text/plain", "AC control Unknown value " + value);
+      return;
+    }    
+  }
+  server.send(200, "text/plain", "AC control " + value);
 }
 
 void handleNotFound(){
@@ -234,6 +256,7 @@ void setup() {
   }
   pinMode(BLUE_LED_PIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
+  pinMode(OPTOCOUPLER_PIN, INPUT);
 
   DEBUG_LOG_INFO_LN("local ip");
   DEBUG_LOG_INFO_LN(WiFi.localIP());
@@ -246,6 +269,7 @@ void setup() {
   server.on("/disconnectWifi", handleDisconnect);
   server.on("/relay", handleRelay);
   server.on("/led", handleLed);
+  server.on("/acControl", handleAcControl);
   
   server.onNotFound(handleNotFound);
 
@@ -439,6 +463,7 @@ void loop() {
   static float last_set_temp = 0;
   static int last_read_time = 0;
   static int acOn = 0;
+  int error = 0;
 
 
   if (telnet.hasClient()) {
@@ -467,6 +492,34 @@ void loop() {
   DEBUG_LOG_LN((currentTime - lastAction));
   DEBUG_LOG_INFO("timeForAction ");
   DEBUG_LOG_LN(timeForAction);
+
+  if(forcedAC == FORCED_AC_ON) {
+    DEBUG_LOG_INFO_LN("Turn ON AC");
+    forcedAC = 0;
+
+    if(acOn) {
+      timeForAction += AC_ON_TIME_FOR_ACTION;
+    }
+    else {
+      timeForAction = AC_ON_TIME_FOR_ACTION;
+      acOn = 1;
+    }
+    lastAction = currentTime;
+  }
+
+  if(forcedAC == FORCED_AC_OFF) {
+    DEBUG_LOG_INFO_LN("Turn OFF AC");
+    forcedAC = 0;
+
+    if(acOn == 0) {
+      timeForAction += AC_OFF_TIME_FOR_ACTION;
+    }
+    else {
+      timeForAction = AC_OFF_TIME_FOR_ACTION;
+      acOn = 0;
+    }
+    lastAction = currentTime;
+  }
   
   if(lastAction == 0 || ((currentTime - lastAction) >= timeForAction)) {
     float temp, set_temp;
@@ -474,8 +527,10 @@ void loop() {
     int ret = getTemperature(&temp, &set_temp, &read_time);
     if(ret != 0) {
       DEBUG_LOG_INFO_LN("Thermostat get temp error");
-      digitalWrite(RELAY_PIN, RELAY_TURN_OFF);
       timeForAction = NORMAL_TIME_FOR_ACTION;
+      DEBUG_LOG_INFO_LN("Turn Off AC");
+      acOn = 0;
+      error = 1;
     }
     else {
       if((read_time - last_read_time)<(timeForAction/2)) {
@@ -485,6 +540,9 @@ void loop() {
         DEBUG_LOG_INFO("\tLast read Time: ");
         DEBUG_LOG_LN(last_read_time);      
         timeForAction = NORMAL_TIME_FOR_ACTION;
+        DEBUG_LOG_INFO_LN("Turn Off AC");
+        acOn = 0;
+        error = 1;
       }
       else {
         DEBUG_LOG_INFO_LN("Temperature: ");
@@ -497,7 +555,6 @@ void loop() {
 
         if(set_temp < temp) {
           DEBUG_LOG_INFO_LN("Turn On AC");
-          digitalWrite(RELAY_PIN, RELAY_TURN_ON);
           if(acOn) {
             timeForAction = NORMAL_TIME_FOR_ACTION;
           }
@@ -508,9 +565,8 @@ void loop() {
         }
         else {
           DEBUG_LOG_INFO_LN("Turn Off AC");
-          digitalWrite(RELAY_PIN, RELAY_TURN_OFF);
           if(acOn) {
-            timeForAction = AC_ON_TIME_FOR_ACTION;
+            timeForAction = AC_OFF_TIME_FOR_ACTION;
           }
           else {
             timeForAction = NORMAL_TIME_FOR_ACTION;
@@ -526,11 +582,29 @@ void loop() {
     lastAction = currentTime;    
   }
 
-  digitalWrite(BLUE_LED_PIN, LOW);
-  delay(1000);
-  digitalWrite(BLUE_LED_PIN, HIGH);
-  delay(1000);
+  if(acOn) {
+    digitalWrite(RELAY_PIN, RELAY_TURN_ON);
+  }
+  else {
+    digitalWrite(RELAY_PIN, RELAY_TURN_OFF);
+  }
 
+  if(error) {
+    digitalWrite(BLUE_LED_PIN, LOW);
+    delay(500);
+    digitalWrite(BLUE_LED_PIN, HIGH);
+    delay(500);
+    digitalWrite(BLUE_LED_PIN, LOW);
+    delay(500);
+    digitalWrite(BLUE_LED_PIN, HIGH);
+    delay(500);
+  }
+  else {
+    digitalWrite(BLUE_LED_PIN, LOW);
+    delay(1000);
+    digitalWrite(BLUE_LED_PIN, HIGH);
+    delay(1000);
+  }
   DEBUG_LOG_INFO("Memory: ");
   DEBUG_LOG_LN(ESP.getFreeHeap());
   
