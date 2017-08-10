@@ -402,7 +402,9 @@ int getThermostatData(float * temp, float* set_temp, int* read_time){
     DEBUG_LOG_INFO_LN("failed get sync thermostat");
     return ret;
   }
-
+  // Give some time for the thermostat to update the value
+  delay(2000);
+  
   ret = httpsPostRequest("api.netatmo.com", 443, "/api/getthermostatsdata"+params, "", &str_temp);
   if(ret != 0) {
     DEBUG_LOG_INFO_LN("failed get temperature");
@@ -524,62 +526,74 @@ void loop() {
   if(lastAction == 0 || ((currentTime - lastAction) >= timeForAction)) {
     float temp, set_temp;
     int read_time;
-    int ret = getTemperature(&temp, &set_temp, &read_time);
-    if(ret != 0) {
-      DEBUG_LOG_INFO_LN("Thermostat get temp error");
-      timeForAction = NORMAL_TIME_FOR_ACTION;
-      DEBUG_LOG_INFO_LN("Turn Off AC");
-      acOn = 0;
-      error = 1;
-    }
-    else {
-      if((read_time - last_read_time)<(timeForAction/2)) {
-        DEBUG_LOG_INFO_LN("Thermostat read time Error: ");
-        DEBUG_LOG_INFO("\tRead Time: ");
-        DEBUG_LOG_LN(read_time);
-        DEBUG_LOG_INFO("\tLast read Time: ");
-        DEBUG_LOG_LN(last_read_time);      
+    error = 0;
+    while(1) {
+      int ret = getTemperature(&temp, &set_temp, &read_time);
+      if(ret != 0) {
+        DEBUG_LOG_INFO_LN("Thermostat get temp error");
         timeForAction = NORMAL_TIME_FOR_ACTION;
         DEBUG_LOG_INFO_LN("Turn Off AC");
         acOn = 0;
         error = 1;
       }
       else {
-        DEBUG_LOG_INFO_LN("Temperature: ");
-        DEBUG_LOG_LN(temp);
-        DEBUG_LOG_INFO_LN("Set Temperature: ");
-        DEBUG_LOG_LN(set_temp);
-        DEBUG_LOG_INFO_LN("Reading Time: ");
-        DEBUG_LOG_LN(read_time);
-        DEBUG_LOG_INFO_LN("Reading Time Diff: ");
-
-        if(set_temp < temp) {
-          DEBUG_LOG_INFO_LN("Turn On AC");
-          if(acOn) {
-            timeForAction = NORMAL_TIME_FOR_ACTION;
+        if((read_time - last_read_time)<(timeForAction/2)) {
+          DEBUG_LOG_INFO_LN("Thermostat read time Error: ");
+          DEBUG_LOG_INFO("\tRead Time: ");
+          DEBUG_LOG_LN(read_time);
+          DEBUG_LOG_INFO("\tLast read Time: ");
+          DEBUG_LOG_LN(last_read_time);
+          if(error!=2){
+            DEBUG_LOG_INFO_LN("Wait 10 seconds before retrying");
+            delay(10000);
+            error = 2;
+            continue;
           }
           else {
-            timeForAction = AC_ON_TIME_FOR_ACTION;
+            timeForAction = NORMAL_TIME_FOR_ACTION;
+            DEBUG_LOG_INFO_LN("Turn Off AC");
+            acOn = 0;
+            error = 1;            
           }
-          acOn = 1;
         }
         else {
-          DEBUG_LOG_INFO_LN("Turn Off AC");
-          if(acOn) {
-            timeForAction = AC_OFF_TIME_FOR_ACTION;
+          DEBUG_LOG_INFO_LN("Temperature: ");
+          DEBUG_LOG_LN(temp);
+          DEBUG_LOG_INFO_LN("Set Temperature: ");
+          DEBUG_LOG_LN(set_temp);
+          DEBUG_LOG_INFO_LN("Reading Time: ");
+          DEBUG_LOG_LN(read_time);
+          DEBUG_LOG_INFO_LN("Reading Time Diff: ");
+  
+          if(set_temp < temp) {
+            DEBUG_LOG_INFO_LN("Turn On AC");
+            if(acOn) {
+              timeForAction = NORMAL_TIME_FOR_ACTION;
+            }
+            else {
+              timeForAction = AC_ON_TIME_FOR_ACTION;
+            }
+            acOn = 1;
           }
           else {
-            timeForAction = NORMAL_TIME_FOR_ACTION;
+            DEBUG_LOG_INFO_LN("Turn Off AC");
+            if(acOn) {
+              timeForAction = AC_OFF_TIME_FOR_ACTION;
+            }
+            else {
+              timeForAction = NORMAL_TIME_FOR_ACTION;
+            }
+            acOn = 0;
           }
-          acOn = 0;
         }
-      }
-
-      last_temp = temp;
-      last_set_temp = set_temp;
-      last_read_time = read_time;
+  
+        last_temp = temp;
+        last_set_temp = set_temp;
+        last_read_time = read_time;
+      }    
+      break;
     }
-    lastAction = currentTime;    
+    lastAction = currentTime;
   }
 
   if(acOn) {
